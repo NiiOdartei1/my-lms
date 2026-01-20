@@ -71,6 +71,7 @@ login_manager.init_app(app)
 login_manager.login_view = 'select_portal'
 
 # ===== Context processors =====
+# ===== Context processors =====
 @app.context_processor
 def inject_csrf():
     return dict(csrf_token=generate_csrf)
@@ -84,10 +85,14 @@ def inject_active_assessment_period():
     def get_active_period():
         try:
             from models import TeacherAssessmentPeriod
+            # Query only happens when template is rendered (within request context)
             return TeacherAssessmentPeriod.query.filter_by(is_active=True).first()
-        except Exception:
+        except Exception as e:
+            logger.warning("Error fetching active assessment period: %s", e)
             return None
-    return {'active_assessment_period': get_active_period}
+    
+    # Return the function itself, not the result
+    return {'active_assessment_period': get_active_period()}
 
 # ===== Error Handlers =====
 @app.errorhandler(CSRFError)
