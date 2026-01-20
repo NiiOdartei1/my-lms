@@ -1,4 +1,9 @@
+# utils/helpers.py
 def get_class_choices():
+    """
+    Return a list of default class choices.
+    Each item is a tuple (display_name, display_name) for select fields.
+    """
     return [
         ('Primary 1', 'Primary 1'),
         ('Primary 2', 'Primary 2'),
@@ -13,4 +18,3 @@ def get_class_choices():
         ('SHS 2', 'SHS 2'),
         ('SHS 3', 'SHS 3'),
     ]
-
