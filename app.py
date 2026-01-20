@@ -1,23 +1,14 @@
-# app.py - My LMS — Bulletproof Startup
+# app.py - My LMS — Render-Optimized Version
 
 import os
 import logging
 from datetime import datetime
-from flask import Flask, render_template, redirect, url_for, flash, request, abort, jsonify, send_from_directory
+from flask import Flask, render_template, redirect, url_for, flash, abort, jsonify, send_from_directory
 from werkzeug.utils import secure_filename
+
+# Load environment variables
 from dotenv import load_dotenv
-
-if os.environ.get("FLASK_ENV") == "production":
-    import eventlet
-    eventlet.monkey_patch()
-
-# ===== Extensions & Config =====
-from flask_login import LoginManager, login_required, logout_user, current_user
-from flask_migrate import Migrate
-from flask_wtf.csrf import CSRFProtect, CSRFError, generate_csrf
-from flask_session import Session
-from utils.extensions import db, mail, socketio
-from config import Config
+load_dotenv()
 
 # ===== Logging =====
 logging.basicConfig(level=logging.INFO)
@@ -25,50 +16,64 @@ logger = logging.getLogger(__name__)
 
 # ===== Flask App =====
 app = Flask(__name__)
-app.config.from_object(Config)
+app.config.from_object("config.Config")
 
 # ===== Paths =====
-app.config.setdefault('SQLALCHEMY_DATABASE_URI', 'sqlite:///lms.db')
-app.config.setdefault('SESSION_TYPE', 'sqlalchemy')
-app.config['SESSION_SQLALCHEMY'] = db
-app.config.setdefault('SESSION_SQLALCHEMY_TABLE', 'sessions')
-app.config.setdefault('SESSION_PERMANENT', False)
-app.config.setdefault('SESSION_USE_SIGNER', True)
-app.config.setdefault('UPLOAD_FOLDER', os.path.join(app.instance_path, 'uploads'))
-app.config.setdefault('MATERIALS_FOLDER', os.path.join(app.instance_path, 'materials'))
-app.config.setdefault('PAYMENT_PROOF_FOLDER', os.path.join(app.instance_path, 'payment_proofs'))
-app.config.setdefault('RECEIPT_FOLDER', os.path.join(app.instance_path, 'receipts'))
-app.config.setdefault('PROFILE_PICS_FOLDER', os.path.join(app.instance_path, 'profile_pics'))
-
-for folder in [
+folders = [
     app.instance_path,
-    app.config['UPLOAD_FOLDER'],
-    app.config['MATERIALS_FOLDER'],
-    app.config['PAYMENT_PROOF_FOLDER'],
-    app.config['RECEIPT_FOLDER'],
-    app.config['PROFILE_PICS_FOLDER'],
-]:
+    os.path.join(app.instance_path, 'uploads'),
+    os.path.join(app.instance_path, 'materials'),
+    os.path.join(app.instance_path, 'payment_proofs'),
+    os.path.join(app.instance_path, 'receipts'),
+    os.path.join(app.instance_path, 'profile_pics'),
+]
+
+for folder in folders:
     os.makedirs(folder, exist_ok=True)
 
 logger.info("App instance path: %s", app.instance_path)
 
 # ===== Extensions =====
+from utils.extensions import db, mail, socketio
+from flask_migrate import Migrate
+from flask_wtf.csrf import CSRFProtect, CSRFError, generate_csrf
+from flask_session import Session
+from flask_login import LoginManager, login_required, logout_user
+
 db.init_app(app)
 mail.init_app(app)
 migrate = Migrate(app, db)
 csrf = CSRFProtect(app)
-load_dotenv()
-
-IS_PRODUCTION = os.environ.get("FLASK_ENV") == "production"
-SOCKETIO_ASYNC_MODE = "eventlet" if IS_PRODUCTION else "threading"
-
-logger.info("SocketIO async_mode=%s", SOCKETIO_ASYNC_MODE)
-socketio.init_app(app, async_mode=SOCKETIO_ASYNC_MODE, manage_session=False)
 sess = Session(app)
 
+# ===== Production Check & SocketIO =====
+IS_PRODUCTION = os.environ.get("FLASK_ENV") == "production"
+
+if IS_PRODUCTION:
+    import eventlet
+    eventlet.monkey_patch()
+SOCKETIO_ASYNC_MODE = "eventlet" if IS_PRODUCTION else "threading"
+logger.info("SocketIO async_mode=%s", SOCKETIO_ASYNC_MODE)
+socketio.init_app(app, async_mode=SOCKETIO_ASYNC_MODE, manage_session=False)
+
+# ===== Login Manager =====
 login_manager = LoginManager()
 login_manager.init_app(app)
 login_manager.login_view = 'select_portal'
+
+@login_manager.user_loader
+def load_user(user_id):
+    try:
+        from models import Admin, User
+        if user_id.startswith("admin:"):
+            uid = user_id.split(":", 1)[1]
+            return Admin.query.filter_by(public_id=uid).first()
+        elif user_id.startswith("user:"):
+            uid = user_id.split(":", 1)[1]
+            return User.query.filter_by(public_id=uid).first()
+    except Exception as e:
+        logger.exception("user_loader error: %s", e)
+    return None
 
 # ===== Context processors =====
 @app.context_processor
@@ -85,7 +90,8 @@ def inject_active_assessment_period():
         try:
             from models import TeacherAssessmentPeriod
             return TeacherAssessmentPeriod.query.filter_by(is_active=True).first()
-        except Exception:
+        except Exception as e:
+            logger.warning("Error fetching active assessment period: %s", e)
             return None
     return {'active_assessment_period': get_active_period}
 
@@ -100,75 +106,16 @@ def set_headers(response):
     response.headers.setdefault('Cache-Control', 'no-store')
     return response
 
-
-# Import SocketIO handlers
-import call_window
-
-# Import blueprints
-from admin_routes import admin_bp
-from teacher_routes import teacher_bp
-from student_routes import student_bp
-from parent_routes import parent_bp
-from utils.auth_routes import auth_bp
-from exam_routes import exam_bp
-from vclass_routes import vclass_bp
-from chat_routes import chat_bp
-from admissions.routes import admissions_bp
-#from jarvis import jarvis_bp, run_on_startup
-
-# Register blueprints
-app.register_blueprint(admin_bp, url_prefix="/admin")
-app.register_blueprint(teacher_bp, url_prefix="/teacher")
-app.register_blueprint(student_bp, url_prefix="/student")
-app.register_blueprint(parent_bp, url_prefix="/parent")
-app.register_blueprint(auth_bp)
-app.register_blueprint(exam_bp, url_prefix="/exam")
-app.register_blueprint(vclass_bp, url_prefix="/vclass")
-app.register_blueprint(chat_bp, url_prefix="/chat")
-app.register_blueprint(admissions_bp, url_prefix="/admissions")
-#app.register_blueprint(jarvis_bp)
-
-logger.info("✓ All blueprints registered")
-
-# ===== Login Manager =====
-@login_manager.user_loader
-def load_user(user_id):
-    try:
-        # Lazy import to avoid DB work at module import time
-        from models import Admin, User
-        if isinstance(user_id, str) and user_id.startswith("admin:"):
-            uid = user_id.split(":", 1)[1]
-            return Admin.query.filter_by(public_id=uid).first()
-        elif isinstance(user_id, str) and user_id.startswith("user:"):
-            uid = user_id.split(":", 1)[1]
-            return User.query.filter_by(public_id=uid).first()
-    except Exception as e:
-        logger.exception("user_loader error: %s", e)
-    return None
-
-# ===== One-Time Initialization Function =====
+# ===== One-Time Initialization =====
 def one_time_init():
-    logger.info("=" * 70)
-    logger.info("STARTING ONE-TIME APP INITIALIZATION")
-    logger.info("=" * 70)
-
-    # Run Jarvis automatically
-    #run_on_startup(app)
-    
-    # Lazy import models to avoid app-context errors at import time
+    logger.info("===== STARTING APP INITIALIZATION =====")
     from models import Admin, SchoolClass
+    from utils.helpers import get_class_choices
 
-    # DB tables
     db.create_all()
     logger.info("✓ Database tables created/verified")
 
-    # Default Admin
-    try:
-        super_admin = Admin.query.filter_by(username='SuperAdmin').first()
-    except Exception:
-        super_admin = None
-
-    if not super_admin:
+    if not Admin.query.filter_by(username='SuperAdmin').first():
         admin = Admin(username='SuperAdmin', admin_id='ADM001')
         admin.set_password('Password123')
         db.session.add(admin)
@@ -177,26 +124,43 @@ def one_time_init():
     else:
         logger.info("✓ SuperAdmin already exists")
 
-    # Default classes
-    try:
-        from utils.helpers import get_class_choices
-        existing = {c.name for c in SchoolClass.query.all()}
-        created = 0
-        for name, _ in get_class_choices():
-            if name not in existing:
-                db.session.add(SchoolClass(name=name))
-                created += 1
-        if created:
-            db.session.commit()
-            logger.info(f"✓ Created {created} default classes")
-        else:
-            logger.info("✓ All default classes already exist")
-    except Exception as e:
-        logger.exception("⚠ Class setup warning (non-fatal): %s", e)
+    existing = {c.name for c in SchoolClass.query.all()}
+    created = 0
+    for name, _ in get_class_choices():
+        if name not in existing:
+            db.session.add(SchoolClass(name=name))
+            created += 1
+    if created:
+        db.session.commit()
+        logger.info(f"✓ Created {created} default classes")
+    else:
+        logger.info("✓ All default classes already exist")
+    logger.info("===== APP INITIALIZATION COMPLETE =====")
 
-    logger.info("=" * 70)
-    logger.info("✓✓✓ APP INITIALIZATION COMPLETE - READY TO SERVE REQUESTS ✓✓✓")
-    logger.info("=" * 70)
+# ===== Blueprints (Lazy Import) =====
+def register_blueprints():
+    from admin_routes import admin_bp
+    from teacher_routes import teacher_bp
+    from student_routes import student_bp
+    from parent_routes import parent_bp
+    from utils.auth_routes import auth_bp
+    from exam_routes import exam_bp
+    from vclass_routes import vclass_bp
+    from chat_routes import chat_bp
+    from admissions.routes import admissions_bp
+
+    app.register_blueprint(admin_bp, url_prefix="/admin")
+    app.register_blueprint(teacher_bp, url_prefix="/teacher")
+    app.register_blueprint(student_bp, url_prefix="/student")
+    app.register_blueprint(parent_bp, url_prefix="/parent")
+    app.register_blueprint(auth_bp)
+    app.register_blueprint(exam_bp, url_prefix="/exam")
+    app.register_blueprint(vclass_bp, url_prefix="/vclass")
+    app.register_blueprint(chat_bp, url_prefix="/chat")
+    app.register_blueprint(admissions_bp, url_prefix="/admissions")
+    logger.info("✓ All blueprints registered")
+
+register_blueprints()
 
 # ===== Routes =====
 @app.route('/')
@@ -204,7 +168,7 @@ def home():
     try:
         return render_template('home.html')
     except Exception as e:
-        logger.exception("Template error on / : %s", e)
+        logger.exception("Template error on /: %s", e)
         return f"<h1>Template rendering error: {e}</h1>", 500
 
 @app.route('/portal')
@@ -244,18 +208,6 @@ def list_routes():
     lines = [f"{rule.endpoint:30s} → {unquote(str(rule))}" for rule in app.url_map.iter_rules()]
     return "<pre>" + "\n".join(sorted(lines)) + "</pre>"
 
-
-#from utils.email import send_email
-
-#@app.route('/test-email')
-#def test_email():
-#    send_email(
-#        "lampteyjoseph860@gmail.com",
-#        "Email Test Successful",
-#        "If you received this email, Flask-Mailman is working correctly."
-#    )
-#    return "Email sent successfully"
-
 # ===== Run =====
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
@@ -263,7 +215,6 @@ if __name__ == "__main__":
     logger.info("Environment: %s", "PRODUCTION" if IS_PRODUCTION else "LOCAL")
     logger.info("SocketIO mode: %s", SOCKETIO_ASYNC_MODE)
 
-    # ===== RUN ONE-TIME INIT BEFORE SERVER START =====
     with app.app_context():
         one_time_init()
 
