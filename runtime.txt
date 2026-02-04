@@ -1,8 +1,4 @@
 python-3.11
-    def semester(student_id, academic_year=None, semester=None):
-
-        # Resolve academic period dynamically
-        if not academic_year or not semester:
             release = AcademicPeriodService.get_current_released()
             if not release:
                 return {
