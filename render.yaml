@@ -4,7 +4,7 @@ services:
     env: python
     plan: starter
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn --worker-class eventlet -w 1 app:app
+    startCommand: gunicorn -w 1 app:app
     healthCheckPath: /health
     envVars:
       - key: SECRET_KEY

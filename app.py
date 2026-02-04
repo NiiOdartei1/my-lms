@@ -23,10 +23,6 @@ from dotenv import load_dotenv
 load_dotenv()
 from models import Admin, StudentProfile, User
 
-if os.environ.get("FLASK_ENV") == "production":
-    import eventlet
-    eventlet.monkey_patch()
-
 # ===== Extensions & Config =====
 from flask_login import LoginManager, login_required, logout_user, current_user
 from flask_migrate import Migrate
