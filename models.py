@@ -942,7 +942,7 @@ class ProgrammeFeeStructure(db.Model):
     description = db.Column(db.String(255), nullable=False, default='Default')
     amount = db.Column(db.Float, nullable=False, default=0.0)
 
-    items = db.Column(db.JSON, nullable=False, default=list)
+    items = db.Column(PG_JSON, nullable=False, default=dict)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     __table_args__ = (
@@ -1734,9 +1734,9 @@ class Notification(db.Model):
     is_archived = db.Column(db.Boolean, default=False)
     
     # Define relationships with foreign_keys parameter
-    user_sender = db.relationship('User', foreign_keys='Notification.sender_id', primaryjoin="and_(Notification.sender_id==User.user_id, Notification.sender_type=='user')", viewonly=True, lazy='joined')
+    user_sender = db.relationship('User', foreign_keys='Notification.sender_id', viewonly=True, lazy='joined', primaryjoin="Notification.sender_id==User.user_id")
     
-    admin_sender = db.relationship('Admin', foreign_keys='Notification.sender_id', primaryjoin="and_(Notification.sender_id==Admin.admin_id, Notification.sender_type=='admin')", viewonly=True, lazy='joined')
+    admin_sender = db.relationship('Admin', foreign_keys='Notification.sender_id', viewonly=True, lazy='joined', primaryjoin="Notification.sender_id==Admin.admin_id")
     
     recipients = db.relationship("NotificationRecipient", back_populates="notification", cascade="all, delete-orphan")
     
@@ -1780,7 +1780,7 @@ class NotificationPreference(db.Model):
     in_app_enabled = db.Column(db.Boolean, default=True)
     
     # Notification type preferences (JSON: type -> enabled)
-    enabled_types = db.Column(db.Text, default='{}')  # JSON dict of enabled notification types
+    enabled_types = db.Column(PG_JSON, default=dict)  # JSON dict of enabled notification types
     
     # Frequency settings
     digest_enabled = db.Column(db.Boolean, default=False)  # Daily digest instead of individual emails
@@ -1851,7 +1851,7 @@ class Conversation(db.Model):
     __tablename__ = "conversation"
     id = db.Column(db.Integer, primary_key=True)
     type = db.Column(db.String(20), nullable=False)  # direct | broadcast | class
-    meta_json = db.Column(db.Text, nullable=True)
+    meta_json = db.Column(PG_JSON, nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
