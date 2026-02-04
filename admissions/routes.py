@@ -21,9 +21,7 @@ from datetime import datetime, timedelta
 # =====================================================
 admissions_bp = Blueprint('admissions', __name__, template_folder='templates', static_folder='static', static_url_path="/admissions/static", url_prefix='/admissions')
 
-PDFKIT_CONFIG = pdfkit.configuration(
-    wkhtmltopdf=r"C:\Program Files\wkhtmltopdf\bin\wkhtmltopdf.exe"
-)
+PDFKIT_CONFIG = pdfkit.configuration()
 
 # =====================================================
 # Applicant login required decorator

@@ -9,7 +9,7 @@ if sys.platform == "win32":
         os.environ["PATH"] = gtk_path + ";" + os.environ["PATH"]
 # ================================================
 
-# app.py - My LMS — Bulletproof Startup
+# app.py - My LMS — Render-Optimized with Local Support
 
 import os
 import logging
@@ -17,6 +17,8 @@ from datetime import datetime
 from flask import Flask, render_template, redirect, url_for, flash, request, abort, jsonify, send_from_directory, current_app
 from sqlalchemy import Table
 from werkzeug.utils import secure_filename
+
+# Load environment variables
 from dotenv import load_dotenv
 load_dotenv()
 from models import Admin, StudentProfile, User
@@ -55,14 +57,16 @@ app.config.setdefault('PAYMENT_PROOF_FOLDER', os.path.join(app.instance_path, 'p
 app.config.setdefault('RECEIPT_FOLDER', os.path.join(app.instance_path, 'receipts'))
 app.config.setdefault('PROFILE_PICS_FOLDER', os.path.join(app.instance_path, 'profile_pics'))
 
-for folder in [
+folders = [
     app.instance_path,
-    app.config['UPLOAD_FOLDER'],
-    app.config['MATERIALS_FOLDER'],
-    app.config['PAYMENT_PROOF_FOLDER'],
-    app.config['RECEIPT_FOLDER'],
-    app.config['PROFILE_PICS_FOLDER'],
-]:
+    os.path.join(app.instance_path, 'uploads'),
+    os.path.join(app.instance_path, 'materials'),
+    os.path.join(app.instance_path, 'payment_proofs'),
+    os.path.join(app.instance_path, 'receipts'),
+    os.path.join(app.instance_path, 'profile_pics'),
+]
+
+for folder in folders:
     os.makedirs(folder, exist_ok=True)
 
 logger.info("App instance path: %s", app.instance_path)
@@ -73,27 +77,44 @@ mail.init_app(app)
 migrate = Migrate(app, db)
 csrf = CSRFProtect(app)
 
-IS_PRODUCTION = os.environ.get("FLASK_ENV") == "production"
-SOCKETIO_ASYNC_MODE = "eventlet" if IS_PRODUCTION else "threading"
-
-logger.info("SocketIO async_mode=%s", SOCKETIO_ASYNC_MODE)
-socketio.init_app(app, async_mode=SOCKETIO_ASYNC_MODE, manage_session=False)
-
 # ===== Patch Flask-Session BEFORE using it =====
 from flask_session.sqlalchemy import SqlAlchemySessionInterface
-from sqlalchemy import Table
 
 # patch to allow redefinition of 'sessions' table
 SqlAlchemySessionInterface.create_session_model = lambda self, app: \
     Table('sessions', db.metadata, extend_existing=True)
 
 # now import and initialize Session
-from flask_session import Session
 sess = Session(app)
 
+# ===== Production Check & SocketIO =====
+IS_PRODUCTION = os.environ.get("FLASK_ENV") == "production"
+
+if IS_PRODUCTION:
+    import eventlet
+    eventlet.monkey_patch()
+SOCKETIO_ASYNC_MODE = "eventlet" if IS_PRODUCTION else "threading"
+logger.info("SocketIO async_mode=%s", SOCKETIO_ASYNC_MODE)
+socketio.init_app(app, async_mode=SOCKETIO_ASYNC_MODE, manage_session=False)
+
+# ===== Login Manager =====
 login_manager = LoginManager()
 login_manager.init_app(app)
 login_manager.login_view = 'student.student_login'
+
+@login_manager.user_loader
+def load_user(user_id):
+    try:
+        from models import Admin, User
+        if user_id.startswith("admin:"):
+            uid = user_id.split(":", 1)[1]
+            return Admin.query.filter_by(public_id=uid).first()
+        elif user_id.startswith("user:"):
+            uid = user_id.split(":", 1)[1]
+            return User.query.filter_by(public_id=uid).first()
+    except Exception as e:
+        logger.exception("user_loader error: %s", e)
+    return None
 
 # ===== Context processors =====
 @app.context_processor
@@ -114,7 +135,8 @@ def inject_active_assessment_period():
         try:
             from models import TeacherAssessmentPeriod
             return TeacherAssessmentPeriod.query.filter_by(is_active=True).first()
-        except Exception:
+        except Exception as e:
+            logger.warning("Error fetching active assessment period: %s", e)
             return None
     return {'active_assessment_period': get_active_period}
 
@@ -170,7 +192,6 @@ app.register_blueprint(student_transcript_bp)
 app.register_blueprint(grading_bp)
 app.register_blueprint(results_bp)
 app.register_blueprint(finance_bp, url_prefix='/admin/finance')
-#app.register_blueprint(jarvis_bp)
 
 logger.info("✓ All blueprints registered")
 
@@ -188,57 +209,16 @@ def _start_year_filter(val):
 
 app.jinja_env.filters['start_year'] = _start_year_filter
 
-# ===== Login Manager =====
-@login_manager.user_loader
-def load_user(user_id):
-    try:
-        logger.debug("load_user called with user_id=%s", user_id)
-        if not user_id:
-            return None
-
-        if isinstance(user_id, str) and user_id.startswith("admin:"):
-            uid = user_id.split(":", 1)[1]
-            admin = Admin.query.filter_by(public_id=uid).first()
-            logger.debug("Loaded admin: %s", getattr(admin, 'username', None))
-            return admin
-
-        if isinstance(user_id, str) and user_id.startswith("user:"):
-            uid = user_id.split(":", 1)[1]
-            user = User.query.filter_by(public_id=uid).first()
-            logger.debug("Loaded user: %s", getattr(user, 'user_id', None))
-            return user
-
-        # Fallback: maybe a raw numeric id was stored
-        try:
-            numeric = int(user_id)
-            user = User.query.get(numeric)
-            if user:
-                logger.debug("Loaded user by numeric id: %s", user.user_id)
-                return user
-        except Exception:
-            pass
-
-    except Exception as e:
-        logger.exception("user_loader error: %s", e)
-    return None
-
 # ===== One-Time Initialization Function =====
 def one_time_init():
-    logger.info("Starting data initialization")
+    logger.info("===== STARTING APP INITIALIZATION =====")
 
-    # 1️⃣ Ensure tables exist
     db.create_all()
+    logger.info("✓ Database tables created/verified")
 
     # 2️⃣ Create SuperAdmin if missing
-    super_admin = Admin.query.filter_by(username='SuperAdmin').first()
-    if not super_admin:
-        admin = Admin(
-            username='SuperAdmin',
-            admin_id='ADM001',
-            email='superadmin@dhi.edu.gh',
-            role='superadmin',
-            profile_picture='default_avatar.png'
-        )
+    if not Admin.query.filter_by(username='SuperAdmin').first():
+        admin = Admin(username='SuperAdmin', admin_id='ADM001')
         admin.set_password('Password123')
         Admin.apply_superadmin_preset(admin)
 
@@ -247,34 +227,6 @@ def one_time_init():
         logger.info("✓ SuperAdmin created")
     else:
         logger.info("✓ SuperAdmin already exists")
-
-    # Default programmes + levels
-    try:
-        from utils.helpers import get_programme_choices  # Returns list of (programme_name, levels)
-        
-        # Fetch existing cohorts from StudentProfile (to avoid duplicates)
-        existing_cohorts = {
-            f"{sp.current_programme} {sp.programme_level}"
-            for sp in StudentProfile.query.all()
-        }
-
-        created = 0
-        for programme_name, levels in get_programme_choices():
-            for level in levels:  # e.g., [100, 200, 300, 400]
-                cohort_str = f"{programme_name} {level}"
-                if cohort_str not in existing_cohorts:
-                    # Optionally create a placeholder in StudentProfile or another "ProgrammeCohort" table
-                    # Here we'll log only
-                    logger.info(f"✓ Default cohort ready: {cohort_str}")
-                    created += 1
-
-        if created:
-            logger.info(f"✓ Prepared {created} default tertiary cohorts")
-        else:
-            logger.info("✓ All default cohorts already exist")
-
-    except Exception as e:
-        logger.exception("⚠ Programme setup warning (non-fatal): %s", e)
 
     logger.info("=" * 70)
     logger.info("✓✓✓ APP INITIALIZATION COMPLETE - READY TO SERVE REQUESTS ✓✓✓")
@@ -286,7 +238,7 @@ def home():
     try:
         return render_template('home.html')
     except Exception as e:
-        logger.exception("Template error on / : %s", e)
+        logger.exception("Template error on /: %s", e)
         return f"<h1>Template rendering error: {e}</h1>", 500
 
 @app.route('/portal')
@@ -325,7 +277,6 @@ def list_routes():
     lines = [f"{rule.endpoint:30s} → {unquote(str(rule))}" for rule in app.url_map.iter_rules()]
     return "<pre>" + "\n".join(sorted(lines)) + "</pre>"
 
-
 @app.route('/health')
 def health():
     """Lightweight health check for load balancers and Render."""
@@ -341,7 +292,6 @@ if __name__ == "__main__":
     logger.info("Environment: %s", "PRODUCTION" if IS_PRODUCTION else "LOCAL")
     logger.info("SocketIO mode: %s", SOCKETIO_ASYNC_MODE)
 
-    # ===== RUN ONE-TIME INIT BEFORE SERVER START =====
     with app.app_context():
         one_time_init()
 
