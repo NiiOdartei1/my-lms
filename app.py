@@ -27,7 +27,6 @@ from models import Admin, StudentProfile, User
 from flask_login import LoginManager, login_required, logout_user, current_user
 from flask_migrate import Migrate
 from flask_wtf.csrf import CSRFProtect, CSRFError, generate_csrf
-from flask_session import Session
 from utils.extensions import db, mail, socketio
 from config import Config
 
@@ -41,12 +40,6 @@ app.config.from_object(Config)
 
 # ===== Paths =====
 # Leave SQLALCHEMY_DATABASE_URI to be provided by `Config` (or DATABASE_URL).
-# Ensure session and upload folders are configured.
-app.config.setdefault('SESSION_TYPE', 'sqlalchemy')
-app.config['SESSION_SQLALCHEMY'] = db
-app.config.setdefault('SESSION_SQLALCHEMY_TABLE', 'sessions')
-app.config.setdefault('SESSION_PERMANENT', False)
-app.config.setdefault('SESSION_USE_SIGNER', True)
 app.config.setdefault('UPLOAD_FOLDER', os.path.join(app.instance_path, 'uploads'))
 app.config.setdefault('MATERIALS_FOLDER', os.path.join(app.instance_path, 'materials'))
 app.config.setdefault('PAYMENT_PROOF_FOLDER', os.path.join(app.instance_path, 'payment_proofs'))
@@ -73,21 +66,7 @@ mail.init_app(app)
 migrate = Migrate(app, db)
 csrf = CSRFProtect(app)
 
-# ===== Patch Flask-Session BEFORE using it =====
-from flask_session.sqlalchemy import SqlAlchemySessionInterface
-
-# patch to allow redefinition of 'sessions' table
-SqlAlchemySessionInterface.create_session_model = lambda self, app: \
-    Table('sessions', db.metadata, extend_existing=True)
-
-# now import and initialize Session
-sess = Session(app)
-
-# ===== Production Check & SocketIO =====
-IS_PRODUCTION = os.environ.get("FLASK_ENV") == "production"
-
-if IS_PRODUCTION:
-    import eventlet
+# ===== SocketIO =====
     eventlet.monkey_patch()
 SOCKETIO_ASYNC_MODE = "eventlet" if IS_PRODUCTION else "threading"
 logger.info("SocketIO async_mode=%s", SOCKETIO_ASYNC_MODE)
