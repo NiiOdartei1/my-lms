@@ -9,7 +9,7 @@ colorama==0.4.6
 cryptography==42.0.0
 cssselect==1.2.0
 cssselect2==0.8.0
-flask==2.3.3
+flask==2.2.5
 Flask-Bootstrap==3.3.7.1
 Flask-Login==0.6.3
 flask-mail==0.10.0
